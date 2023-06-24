@@ -17,11 +17,12 @@ namespace robot_location_detection
         Mat matInput;
         Thread cameraThread;
         readonly Size sizeObject = new Size(640, 480);
+        readonly Size sizeObjectDraw = new Size(320, 240);
         string pathToFile;
         int[] ids;
         bool showMarks, searchMarks;
-        string stringForLabel = "Координаты метки: ";
         Point3d[] center;
+        Mat drawMat;
         readonly int markerLength = 300;
         public Form1()
         {
@@ -108,8 +109,8 @@ namespace robot_location_detection
                 }
                 Invoke(new Action(() =>
                 {
-                    label4.Text = stringForLabel;
                     pictureBox1.Image = BitmapConverter.ToBitmap(matInput);
+                    pictureBox2.Image = BitmapConverter.ToBitmap(drawMat);
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
                 }));
@@ -138,20 +139,23 @@ namespace robot_location_detection
 
             if (drawDetectedMarks && corners.Length > 0)
             {
-                label1.Text = corners[0][0].ToString();
-                label2.Text = corners[0][1].ToString();
-                float turnY = corners[0][0].Y - corners[0][1].Y;
-                float turnX = corners[0][0].X - corners[0][1].X;
-
-                label5.Text = (Math.Atan2(turnY, turnX)*180/Math.PI).ToString();
-                label3.Text = Math.Abs(turnY) > 5 ? (turnY < 0 ? "->" : "<-") : "||";
-
+                drawMat = new Mat(sizeObjectDraw, MatType.CV_8UC3, Scalar.Black);
                 CvAruco.DrawDetectedDiamonds(inputMat, corners);
                 for (short i = 0; i < centers.Length; i++)
                 {
+                    float turnY = corners[0][0].Y - corners[0][1].Y;
+                    float turnX = corners[0][0].X - corners[0][1].X;
+                    double angle = Math.Atan2(turnY, turnX) * 180 / Math.PI;
+                    double absAngle = Math.Abs(angle);
+
+                    var pointForDrawingMat = new Point((int)(centers[i].X / 1.9), (int)(centers[i].Z));
+                    drawMat.PutText($"{ids[i]}", pointForDrawingMat, HersheyFonts.HersheySimplex, 0.5, Scalar.YellowGreen);
+                    drawMat.Circle(pointForDrawingMat, 2, Scalar.Red, 2);
+
+                    drawMat.Line(new Point(centers[i].X / 1.9 - 5, centers[i].Z + Math.Tan(-angle * Math.PI / 180) * centers[i].X / 1.9 - 5), new Point(centers[i].X/ 1.9 + 5, centers[i].Z + Math.Tan(angle*Math.PI/180) * centers[i].X/ 1.9 + 5), Scalar.Red);
+
                     inputMat.Circle((int)centers[i].X, (int)centers[i].Y, 2, Scalar.Red, 2);
-                    stringForLabel = $"Координаты метки:    X:{(int)centers[i].X} Y:{(int)centers[i].Y} Z:{(int)centers[i].Z}";
-                    inputMat.PutText($"X:{(int)centers[i].X} Y:{(int)centers[i].Y} Z:{(int)centers[i].Z}", new Point((int)centers[i].X, (int)centers[i].Y), HersheyFonts.HersheySimplex, 0.5, Scalar.Red);
+                    inputMat.PutText($"id:{ids[i]} a:{Math.Round(180 - absAngle, 2)} d:{Math.Round(22 * centers[i].Z / 160, 2)}cm", new Point((int)centers[i].X, (int)centers[i].Y), HersheyFonts.HersheySimplex, 0.5, Scalar.YellowGreen);
                 }
             }
         }
@@ -163,18 +167,8 @@ namespace robot_location_detection
         private void Form1_Load(object sender, EventArgs e)
         {
             markers = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_50);
+            drawMat = new Mat(sizeObjectDraw, MatType.CV_8UC3, Scalar.Black);
         }
-
-        private void label5_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void label3_Click(object sender, EventArgs e)
-        {
-
-        }
-
         private void checkBox1_CheckedChanged(object sender, EventArgs e)
         {
             searchMarks = checkBox1.Checked;
