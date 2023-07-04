@@ -1,10 +1,12 @@
 ﻿using OpenCvSharp;
-using OpenCvSharp.Aruco;
 using OpenCvSharp.Extensions;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
+using Point = OpenCvSharp.Point;
 using Size = OpenCvSharp.Size;
 
 namespace robot_location_detection
@@ -12,21 +14,22 @@ namespace robot_location_detection
     public partial class Form1 : Form
     {
         bool runVideo;
+        List<string> paths = new List<string> { };
+        List<Point[]> countors;
         VideoCapture capture;
-        Dictionary markers;
         Mat matInput;
         Thread cameraThread;
         readonly Size sizeObject = new Size(640, 480);
         readonly Size sizeObjectDraw = new Size(320, 240);
+        Point2f[] sizeMatrixPoints = new Point2f[4] { new Point(0, 240), new Point(0, 0), new Point(320, 0), new Point(320, 240) };
+
         string pathToFile;
-        int[] ids;
-        bool showMarks, searchMarks;
-        Point3d[] center;
         Mat drawMat;
-        readonly int markerLength = 300;
+
         public Form1()
         {
             InitializeComponent();
+            drawMat = new Mat(sizeObjectDraw, MatType.CV_8UC3, Scalar.Black);
         }
         private void DisposeVideo()
         {
@@ -49,38 +52,42 @@ namespace robot_location_detection
         }
         private void button2_Click(object sender, EventArgs e)
         {
-            OpenFileDialog file = new OpenFileDialog()
+            FolderBrowserDialog folder = new FolderBrowserDialog();
+            folder.SelectedPath = @"D:\Study\4 sem\TechnicalVision\CVSLab6Photos";
+
+            if (folder.ShowDialog() == DialogResult.OK)
             {
-                Multiselect = false
-            };
-            if (file.ShowDialog() == DialogResult.OK)
-            {
-                var tempPath = file.FileName;
-                if (File.Exists(tempPath))
+                listBox1.Items.Clear();
+                paths.Clear();
+
+                string[] files = Directory.GetFiles(folder.SelectedPath);
+
+                foreach (var file in files)
                 {
-                    var ext = Path.GetExtension(tempPath);
-                    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")
+                    var ext = Path.GetExtension(file);
+
+                    if (ext == ".bmp" || ext == ".png" || ext == ".jpg")
                     {
-                        pathToFile = tempPath;
-                        textBox1.Text = pathToFile;
+                        paths.Add(file);
+                        listBox1.Items.Add(Path.GetFileName(file));
                     }
                 }
+                listBox1.SelectedIndex = 0;
+                listBox1_SelectedIndexChanged(sender, e);
             }
-            file.Dispose();
+            folder.Dispose();
         }
         private void button1_Click(object sender, EventArgs e)
         {
             if (runVideo)
             {
                 runVideo = false;
-                panel3.Enabled = false;
                 DisposeVideo();
                 button1.Text = "Старт";
             }
             else
             {
                 runVideo = true;
-                panel3.Enabled = true;
                 matInput = new Mat();
 
                 if (radioButton1.Checked)
@@ -97,81 +104,101 @@ namespace robot_location_detection
                 button1.Text = "Стоп";
             }
         }
-
+        Mat matWorkZone = new Mat();
+        List<Point2f[]> points2f;
         private void CaptureCameraCallback()
         {
             while (runVideo)
             {
                 matInput = radioButton1.Checked ? capture.RetrieveMat() : new Mat(pathToFile).Resize(sizeObject);
-                if (searchMarks)
+
+                if (test)
                 {
-                    SearchAndShowMarks(markers, ref matInput, out ids, out center, showMarks);
+                    SearchingContours(ref matInput, out countors, out points2f);
+                    matInput.DrawContours(countors, -1, Scalar.Red);
+                    if (countors.Count > 0)
+                    {
+                        matWorkZone = new Mat(matInput, Cv2.BoundingRect(countors[0])).Resize(new Size(160, 120)).CvtColor(ColorConversionCodes.BGR2GRAY).Threshold(128,255,ThresholdTypes.Binary);
+                    }
+
                 }
+
                 Invoke(new Action(() =>
                 {
                     pictureBox1.Image = BitmapConverter.ToBitmap(matInput);
-                    pictureBox2.Image = BitmapConverter.ToBitmap(drawMat);
+                    pictureBox2.Image = BitmapConverter.ToBitmap(matWorkZone);
+
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
                 }));
             }
         }
-
-        private void SearchAndShowMarks(Dictionary marksDict, ref Mat inputMat, out int[] ids, out Point3d[] centers, bool drawDetectedMarks)
+        public void CutSomeCountors(Mat sourceImage, List<Point[]> contours, out Mat outputImage)
         {
-            Point2f[][] corners;
-            var param = new DetectorParameters();
-            CvAruco.DetectMarkers(inputMat, marksDict, out corners, out ids, param, out _);
-            centers = new Point3d[corners.Length];
+            outputImage = new Mat();
 
-            for (short i = 0; i < centers.Length; i++)
+            foreach(var item in countors)
             {
-                for (byte j = 0; j < 4; j++)
-                {
-                    centers[i].X += (int)corners[i][j].X;
-                    centers[i].Y += (int)corners[i][j].Y;
-                }
-                centers[i].X /= 4;
-                centers[i].Y /= 4;
-                centers[i].Z = markerLength - (int)Point2f.Distance(corners[i][0], corners[i][1]);
-            }
+                var a = Cv2.BoundingRect(item);
 
-
-            if (drawDetectedMarks && corners.Length > 0)
-            {
-                drawMat = new Mat(sizeObjectDraw, MatType.CV_8UC3, Scalar.Black);
-                CvAruco.DrawDetectedDiamonds(inputMat, corners);
-                for (short i = 0; i < centers.Length; i++)
-                {
-                    float turnY = corners[0][0].Y - corners[0][1].Y;
-                    float turnX = corners[0][0].X - corners[0][1].X;
-                    double angle = Math.Atan2(turnY, turnX) * 180 / Math.PI;
-                    double absAngle = Math.Abs(angle);
-
-                    var pointForDrawingMat = new Point((int)(centers[i].X / 1.9), (int)(centers[i].Z));
-                    drawMat.PutText($"{ids[i]}", pointForDrawingMat, HersheyFonts.HersheySimplex, 0.5, Scalar.YellowGreen);
-                    drawMat.Circle(pointForDrawingMat, 2, Scalar.Red, 2);
-
-                    drawMat.Line(new Point(centers[i].X / 1.9 - 5, centers[i].Z + Math.Tan(-angle * Math.PI / 180) * centers[i].X / 1.9 - 5), new Point(centers[i].X/ 1.9 + 5, centers[i].Z + Math.Tan(angle*Math.PI/180) * centers[i].X/ 1.9 + 5), Scalar.Red);
-
-                    inputMat.Circle((int)centers[i].X, (int)centers[i].Y, 2, Scalar.Red, 2);
-                    inputMat.PutText($"id:{ids[i]} a:{Math.Round(180 - absAngle, 2)} d:{Math.Round(22 * centers[i].Z / 160, 2)}cm", new Point((int)centers[i].X, (int)centers[i].Y), HersheyFonts.HersheySimplex, 0.5, Scalar.YellowGreen);
-                }
             }
         }
-        private void checkBox2_CheckedChanged(object sender, EventArgs e)
+        public void SearchingContours(ref Mat inputMat, out List<Point[]> flitredCountours, out List<Point2f[]> flitredCountours2f)
         {
-            showMarks = checkBox2.Checked;
+            flitredCountours = new List<Point[]>();
+            flitredCountours2f = new List<Point2f[]>();
+
+            Point[][] contours;
+
+            inputMat.MedianBlur(3).Canny(70, 150).FindContours(out contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+            foreach (var contour in contours)
+            {
+                // Создаем новый массив для аппроксимированного контура
+                var approximatedContour = new Point[contour.Length];
+                var approximatedContour2f = new Point2f[contour.Length];
+
+
+                // Создаем объект типа Mat, содержащий координаты контура
+                using (var contourMat = new Mat(1, contour.Length, MatType.CV_32SC2, contour.SelectMany(p => new[] { p.X, p.Y }).ToArray()))
+                {
+                    // Выполняем аппроксимацию контура
+                    Cv2.ApproxPolyDP(contourMat, contourMat, 5, true);
+
+                    // Копируем координаты аппроксимированного контура в массив
+                    contourMat.GetArray(out approximatedContour);
+
+                }
+                using (var contourMat = new Mat(1, contour.Length, MatType.CV_32FC2, contour.SelectMany(p => new[] { p.X, p.Y }).ToArray()))
+                {
+                    // Выполняем аппроксимацию контура
+                    Cv2.ApproxPolyDP(contourMat, contourMat, 5, true);
+
+                    // Копируем координаты аппроксимированного контура в массив
+                    contourMat.GetArray(out approximatedContour2f);
+
+                }
+
+                // Добавляем аппроксимированный контур в список
+                if (approximatedContour.Length == 4 && Cv2.ContourArea(approximatedContour) > 600)
+                {
+                    flitredCountours.Add(approximatedContour);
+                    flitredCountours2f.Add(approximatedContour2f);
+                }
+            }
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        private void listBox1_SelectedIndexChanged(object sender, EventArgs e)
         {
-            markers = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_50);
-            drawMat = new Mat(sizeObjectDraw, MatType.CV_8UC3, Scalar.Black);
+            if (listBox1.SelectedIndex != -1)
+            {
+                pathToFile = paths[listBox1.SelectedIndex];
+            }
         }
+        bool test;
         private void checkBox1_CheckedChanged(object sender, EventArgs e)
         {
-            searchMarks = checkBox1.Checked;
+            test = checkBox1.Checked;
         }
     }
 }
