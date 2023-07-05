@@ -16,13 +16,15 @@ namespace robot_location_detection
         bool runVideo;
         List<string> paths = new List<string> { };
         List<Point[]> countors;
+        List<Point2f[]> countors2f;
+        bool search, designations;
         VideoCapture capture;
         Mat matInput;
         Thread cameraThread;
         readonly Size sizeObject = new Size(640, 480);
         readonly Size sizeObjectDraw = new Size(320, 240);
-        Point2f[] sizeMatrixPoints = new Point2f[4] { new Point(0, 240), new Point(0, 0), new Point(320, 0), new Point(320, 240) };
-
+        Mat[] matSigns;
+        Mat[] teamplates = new Mat[4];
         string pathToFile;
         Mat drawMat;
 
@@ -30,6 +32,10 @@ namespace robot_location_detection
         {
             InitializeComponent();
             drawMat = new Mat(sizeObjectDraw, MatType.CV_8UC3, Scalar.Black);
+            for (byte i = 0; i < 4; i++)
+            {
+                teamplates[i] = new Mat($@"D:\Study\4 sem\TechnicalVision\CVSLab6Photos\teamplates\{i}.jpg").Resize(new Size(162, 126)).CvtColor(ColorConversionCodes.BGR2GRAY).Threshold(128, 255, ThresholdTypes.Binary);
+            }
         }
         private void DisposeVideo()
         {
@@ -104,49 +110,47 @@ namespace robot_location_detection
                 button1.Text = "Стоп";
             }
         }
-        Mat matWorkZone = new Mat();
-        List<Point2f[]> points2f;
         private void CaptureCameraCallback()
         {
             while (runVideo)
             {
                 matInput = radioButton1.Checked ? capture.RetrieveMat() : new Mat(pathToFile).Resize(sizeObject);
 
-                if (test)
+                if (search)
                 {
-                    SearchingContours(ref matInput, out countors, out points2f);
+                    SearchingContours(ref matInput, out countors, out countors2f);
+                    GetPerspective(matInput, countors2f, out matSigns);
                     matInput.DrawContours(countors, -1, Scalar.Red);
-                    if (countors.Count > 0)
-                    {
-                        matWorkZone = new Mat(matInput, Cv2.BoundingRect(countors[0])).Resize(new Size(160, 120)).CvtColor(ColorConversionCodes.BGR2GRAY).Threshold(128,255,ThresholdTypes.Binary);
-                    }
-
                 }
-
                 Invoke(new Action(() =>
                 {
                     pictureBox1.Image = BitmapConverter.ToBitmap(matInput);
-                    pictureBox2.Image = BitmapConverter.ToBitmap(matWorkZone);
-
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
                 }));
+
             }
         }
-        public void CutSomeCountors(Mat sourceImage, List<Point[]> contours, out Mat outputImage)
+        public void GetPerspective(Mat mat, List<Point2f[]> points, out Mat[] warpMat)
         {
-            outputImage = new Mat();
-
-            foreach(var item in countors)
+            warpMat = new Mat[points.Count];
+            Point2f[] sizeMatrix = new Point2f[4]{
+                new Point2f(0, 0),
+                new Point2f(162, 0),
+                new Point2f(162, 126),
+                new Point2f(0, 126)
+            };
+            for (int i = 0; i < points.Count; i++)
             {
-                var a = Cv2.BoundingRect(item);
-
+                warpMat[i] = mat.Clone();
+                var matrix = Cv2.GetPerspectiveTransform(points[i], sizeMatrix);
+                Cv2.WarpPerspective(mat, warpMat[i], matrix, new Size(162, 126));
+                warpMat[i] = warpMat[i].CvtColor(ColorConversionCodes.BGR2GRAY).Threshold(128, 255, ThresholdTypes.Binary);
             }
         }
-        public void SearchingContours(ref Mat inputMat, out List<Point[]> flitredCountours, out List<Point2f[]> flitredCountours2f)
+        public void SearchingContours(ref Mat inputMat, out List<Point[]> countoursByCircle, out List<Point2f[]> countoursByCircle2f)
         {
-            flitredCountours = new List<Point[]>();
-            flitredCountours2f = new List<Point2f[]>();
+            List<Point[]> flitredCountours = new List<Point[]>();
 
             Point[][] contours;
 
@@ -169,25 +173,15 @@ namespace robot_location_detection
                     contourMat.GetArray(out approximatedContour);
 
                 }
-                using (var contourMat = new Mat(1, contour.Length, MatType.CV_32FC2, contour.SelectMany(p => new[] { p.X, p.Y }).ToArray()))
-                {
-                    // Выполняем аппроксимацию контура
-                    Cv2.ApproxPolyDP(contourMat, contourMat, 5, true);
-
-                    // Копируем координаты аппроксимированного контура в массив
-                    contourMat.GetArray(out approximatedContour2f);
-
-                }
 
                 // Добавляем аппроксимированный контур в список
                 if (approximatedContour.Length == 4 && Cv2.ContourArea(approximatedContour) > 600)
                 {
                     flitredCountours.Add(approximatedContour);
-                    flitredCountours2f.Add(approximatedContour2f);
                 }
             }
+            countoursByCircle = RectangleCornerFinder.FindRectangleCorners(flitredCountours, out countoursByCircle2f);
         }
-
         private void listBox1_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (listBox1.SelectedIndex != -1)
@@ -195,10 +189,13 @@ namespace robot_location_detection
                 pathToFile = paths[listBox1.SelectedIndex];
             }
         }
-        bool test;
         private void checkBox1_CheckedChanged(object sender, EventArgs e)
         {
-            test = checkBox1.Checked;
+            search = checkBox1.Checked;
+        }
+        private void checkBox2_CheckedChanged(object sender, EventArgs e)
+        {
+            designations = checkBox2.Checked;
         }
     }
 }
